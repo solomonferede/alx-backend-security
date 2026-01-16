@@ -1,4 +1,6 @@
+from django.http import HttpResponseForbidden
 from django.utils import timezone
+from django.core.cache import cache
 from .models import RequestLog
 
 
@@ -7,21 +9,22 @@ class IPTrackingMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        ip_address = self.get_client_ip(request)
-        path = request.path
+        ip = self.get_client_ip(request)
+        cache_key = f"blocked_ip:{ip}"
 
-        # Save request log
+        # Redis-based block check
+        if cache.get(cache_key):
+            return HttpResponseForbidden("Your IP has been temporarily blocked.")
+
+        # Log allowed requests
         RequestLog.objects.create(
-            ip_address=ip_address,
-            path=path,
+            ip_address=ip,
+            path=request.path,
             timestamp=timezone.now()
         )
 
-        response = self.get_response(request)
-        return response
+        return self.get_response(request)
 
     def get_client_ip(self, request):
-        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
-        if x_forwarded_for:
-            return x_forwarded_for.split(",")[0]
-        return request.META.get("REMOTE_ADDR")
+        xff = request.META.get("HTTP_X_FORWARDED_FOR")
+        return xff.split(",")[0] if xff else request.META.get("REMOTE_ADDR")
